@@ -20,44 +20,143 @@ namespace fun {
 
 class FunapiErrorImpl : public std::enable_shared_from_this<FunapiErrorImpl> {
  public:
+  typedef FunapiError::ErrorType ErrorType;
   typedef FunapiError::ErrorCode ErrorCode;
 
   FunapiErrorImpl() = delete;
-  FunapiErrorImpl(ErrorCode error_code);
-  ~FunapiErrorImpl() = default;
+  FunapiErrorImpl(const ErrorType type,
+                  const int code,
+                  const std::string& error_string);
+  virtual ~FunapiErrorImpl() = default;
 
-  ErrorCode GetErrorCode();
+  ErrorType GetErrorType();
+  int GetErrorCode();
+  std::string GetErrorString();
+
+  std::string GetErrorTypeString();
+  std::string DebugString();
 
  private:
-  ErrorCode error_code_;
+  ErrorType error_type_;
+  int error_code_;
+  std::string error_string_;
 };
 
 
-FunapiErrorImpl::FunapiErrorImpl (ErrorCode error_code)
-: error_code_(error_code) {
+FunapiErrorImpl::FunapiErrorImpl (const ErrorType type, const int code, const std::string& error_string)
+: error_type_(type), error_code_(code), error_string_(error_string) {
 }
 
 
-FunapiError::ErrorCode FunapiErrorImpl::GetErrorCode() {
+FunapiErrorImpl::ErrorType FunapiErrorImpl::GetErrorType() {
+  return error_type_;
+}
+
+
+int FunapiErrorImpl::GetErrorCode() {
   return error_code_;
+}
+
+
+std::string FunapiErrorImpl::GetErrorString() {
+  return error_string_;
+}
+
+
+std::string FunapiErrorImpl::GetErrorTypeString() {
+  std::string ret;
+
+  switch (error_type_) {
+    case ErrorType::kDefault:
+      ret = "Default";
+      break;
+
+    case ErrorType::kRedirect:
+      ret = "Redirect";
+      break;
+
+    case ErrorType::kSocket:
+      ret = "Socket";
+      break;
+
+    case ErrorType::kCurl:
+      ret = "Curl";
+      break;
+
+    case ErrorType::kSeq:
+      ret = "Seq";
+      break;
+
+    case ErrorType::kPing:
+      ret = "Ping";
+      break;
+
+    default:
+      ret = "None";
+  }
+
+  return ret;
+}
+
+
+std::string FunapiErrorImpl::DebugString() {
+  std::stringstream ss;
+
+  ss << "ErrorType=" << GetErrorTypeString();
+  ss << ":";
+
+  if (error_code_ != 0) {
+    ss << "(" << error_code_ << ")";
+  }
+
+  if (error_string_.length() > 0) {
+    ss << " " << error_string_;
+  }
+
+  return ss.str();
 }
 
 
 ////////////////////////////////////////////////////////////////////////////////
 // FunapiError implementation.
 
-FunapiError::FunapiError (ErrorCode error_code)
-: impl_(std::make_shared<FunapiErrorImpl>(error_code)) {
+FunapiError::FunapiError (const ErrorType type, const int code, const std::string& error_string)
+: impl_(std::make_shared<FunapiErrorImpl>(type, code, error_string)) {
 }
 
 
-std::shared_ptr<FunapiError> FunapiError::Create(ErrorCode error_code) {
-  return std::make_shared<FunapiError>(error_code);
+std::shared_ptr<FunapiError> FunapiError::Create(const ErrorType type, const int code, const std::string& error_string) {
+  return std::make_shared<FunapiError>(type, code, error_string);
 }
 
 
-FunapiError::ErrorCode FunapiError::GetErrorCode() {
+std::shared_ptr<FunapiError> FunapiError::Create(const ErrorType type, const ErrorCode code) {
+  return std::make_shared<FunapiError>(type, static_cast<int>(code), std::string());
+}
+
+
+FunapiError::ErrorType FunapiError::GetErrorType() {
+  return impl_->GetErrorType();
+}
+
+
+int FunapiError::GetErrorCode() {
   return impl_->GetErrorCode();
+}
+
+
+std::string FunapiError::GetErrorString() {
+  return impl_->GetErrorString();
+}
+
+
+std::string FunapiError::GetErrorTypeString() {
+  return impl_->GetErrorTypeString();
+}
+
+
+std::string FunapiError::DebugString() {
+  return impl_->DebugString();
 }
 
 
@@ -67,10 +166,9 @@ FunapiError::ErrorCode FunapiError::GetErrorCode() {
 class FunapiTransportOptionImpl : public std::enable_shared_from_this<FunapiTransportOptionImpl> {
  public:
   FunapiTransportOptionImpl() = default;
-  ~FunapiTransportOptionImpl() = default;
+  virtual ~FunapiTransportOptionImpl() = default;
 
   virtual void SetEncryptionType(EncryptionType type) = 0;
-  virtual EncryptionType GetEncryptionType() = 0;
 };
 
 
@@ -97,10 +195,11 @@ class FunapiTcpTransportOptionImpl : public FunapiTransportOptionImpl {
   void SetConnectTimeout(const int seconds);
   int GetConnectTimeout();
 
-  void SetEncryptionType(EncryptionType type);
-  void SetEncryptionType(EncryptionType type, const std::string &public_key);
-  EncryptionType GetEncryptionType();
-  const std::string& GetPublicKey();
+  void SetEncryptionType(const EncryptionType type);
+  void SetEncryptionType(const EncryptionType type,
+                         const std::string &public_key);
+  std::vector<EncryptionType> GetEncryptionTypes();
+  std::string GetPublicKey(const EncryptionType type);
 
  private:
   bool disable_nagle_ = true;
@@ -108,8 +207,8 @@ class FunapiTcpTransportOptionImpl : public FunapiTransportOptionImpl {
   bool enable_ping_ = false;
   bool sequence_number_validation_ = false;
   int timeout_seconds_ = 10;
-  EncryptionType encryption_type_ = static_cast<EncryptionType>(0);
-  std::string public_key_;
+  std::vector<EncryptionType> encryption_types_;
+  std::unordered_map<int32_t, std::string> pubilc_keys_;
 };
 
 
@@ -163,24 +262,29 @@ int FunapiTcpTransportOptionImpl::GetConnectTimeout() {
 }
 
 
-void FunapiTcpTransportOptionImpl::SetEncryptionType(EncryptionType type) {
-  encryption_type_ = type;
+void FunapiTcpTransportOptionImpl::SetEncryptionType(const EncryptionType type) {
+  encryption_types_.push_back(type);
 }
 
 
-void FunapiTcpTransportOptionImpl::SetEncryptionType(EncryptionType type, const std::string &public_key) {
-  encryption_type_ = type;
-  public_key_ = public_key;
+void FunapiTcpTransportOptionImpl::SetEncryptionType(const EncryptionType type,
+                                                     const std::string &public_key) {
+  SetEncryptionType(type);
+  pubilc_keys_[static_cast<int32_t>(type)] = public_key;
 }
 
 
-EncryptionType FunapiTcpTransportOptionImpl::GetEncryptionType() {
-  return encryption_type_;
+std::vector<EncryptionType> FunapiTcpTransportOptionImpl::GetEncryptionTypes() {
+  return encryption_types_;
 }
 
 
-const std::string& FunapiTcpTransportOptionImpl::GetPublicKey() {
-  return public_key_;
+std::string FunapiTcpTransportOptionImpl::GetPublicKey(const EncryptionType type) {
+  if (pubilc_keys_.find(static_cast<int32_t>(type)) != pubilc_keys_.end()) {
+    return pubilc_keys_[static_cast<int32_t>(type)];
+  }
+
+  return "";
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -191,7 +295,7 @@ class FunapiUdpTransportOptionImpl : public FunapiTransportOptionImpl {
   FunapiUdpTransportOptionImpl() = default;
   virtual ~FunapiUdpTransportOptionImpl() = default;
 
-  void SetEncryptionType(EncryptionType type);
+  void SetEncryptionType(const EncryptionType type);
   EncryptionType GetEncryptionType();
 
  private:
@@ -199,7 +303,7 @@ class FunapiUdpTransportOptionImpl : public FunapiTransportOptionImpl {
 };
 
 
-void FunapiUdpTransportOptionImpl::SetEncryptionType(EncryptionType type) {
+void FunapiUdpTransportOptionImpl::SetEncryptionType(const EncryptionType type) {
   encryption_type_ = type;
 }
 
@@ -226,7 +330,7 @@ class FunapiHttpTransportOptionImpl : public FunapiTransportOptionImpl {
   void SetUseHttps(const bool https);
   bool GetUseHttps();
 
-  void SetEncryptionType(EncryptionType type);
+  void SetEncryptionType(const EncryptionType type);
   EncryptionType GetEncryptionType();
 
   void SetCACertFilePath(const std::string &path);
@@ -235,7 +339,7 @@ class FunapiHttpTransportOptionImpl : public FunapiTransportOptionImpl {
  private:
   bool sequence_number_validation_ = false;
   bool use_https_ = false;
-  EncryptionType encryption_type_ = static_cast<EncryptionType>(0);
+  EncryptionType encryption_type_ = EncryptionType::kNoneEncryption;
   std::string cert_file_path_;
   time_t timeout_seconds_ = 5;
 };
@@ -354,23 +458,24 @@ int FunapiTcpTransportOption::GetConnectTimeout() {
 }
 
 
-void FunapiTcpTransportOption::SetEncryptionType(EncryptionType type) {
+void FunapiTcpTransportOption::SetEncryptionType(const EncryptionType type) {
   impl_->SetEncryptionType(type);
 }
 
 
-EncryptionType FunapiTcpTransportOption::GetEncryptionType() {
-  return impl_->GetEncryptionType();
+std::vector<EncryptionType> FunapiTcpTransportOption::GetEncryptionTypes() {
+  return impl_->GetEncryptionTypes();
 }
 
 
-void FunapiTcpTransportOption::SetEncryptionType(EncryptionType type, const std::string &public_key) {
+void FunapiTcpTransportOption::SetEncryptionType(const EncryptionType type,
+                                                 const std::string &public_key) {
   impl_->SetEncryptionType(type, public_key);
 }
 
 
-const std::string& FunapiTcpTransportOption::GetPublicKey() {
-  return impl_->GetPublicKey();
+std::string FunapiTcpTransportOption::GetPublicKey(const EncryptionType type) {
+  return impl_->GetPublicKey(type);
 }
 
 
@@ -387,7 +492,7 @@ std::shared_ptr<FunapiUdpTransportOption> FunapiUdpTransportOption::Create() {
 }
 
 
-void FunapiUdpTransportOption::SetEncryptionType(EncryptionType type) {
+void FunapiUdpTransportOption::SetEncryptionType(const EncryptionType type) {
   impl_->SetEncryptionType(type);
 }
 
@@ -430,7 +535,7 @@ bool FunapiHttpTransportOption::GetUseHttps() {
 }
 
 
-void FunapiHttpTransportOption::SetEncryptionType(EncryptionType type) {
+void FunapiHttpTransportOption::SetEncryptionType(const EncryptionType type) {
   impl_->SetEncryptionType(type);
 }
 

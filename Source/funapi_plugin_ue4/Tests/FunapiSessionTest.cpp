@@ -14,6 +14,7 @@
 #include <sstream>
 #include <thread>
 #include <chrono>
+#include <mutex>
 
 #include "rapidjson/stringbuffer.h"
 #include "rapidjson/writer.h"
@@ -102,6 +103,134 @@ bool FFunapiSessionTestEchoJson::RunTest(const FString& Parameters)
   });
 
   session->Connect(fun::TransportProtocol::kTcp, 8012, fun::FunEncoding::kJson);
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestReconnectJson,
+                                 "Funapi.Reconnect.R_Json",
+                                 EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestReconnectJson::RunTest(const FString& Parameters) {
+  std::string send_string = "Json Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), false);
+  bool is_ok = true;
+  bool is_working = true;
+
+  session->AddSessionEventCallback
+  ([&send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::SessionEventType type,
+    const std::string &session_id,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::SessionEventType::kOpened) {
+      rapidjson::Document msg;
+      msg.SetObject();
+      rapidjson::Value message_node(send_string.c_str(), msg.GetAllocator());
+      msg.AddMember("message", message_node, msg.GetAllocator());
+
+      // Convert JSON document to string
+      rapidjson::StringBuffer buffer;
+      rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+      msg.Accept(writer);
+      std::string json_string = buffer.GetString();
+
+      s->SendMessage("echo", json_string);
+    }
+  });
+
+  session->AddTransportEventCallback
+  ([&is_ok, &is_working]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::TransportEventType type,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kStopped) {
+      is_ok = true;
+      is_working = false;
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddJsonRecvCallback
+  ([&is_working, &is_ok, &send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const std::string &msg_type, const std::string &json_string)
+  {
+    if (msg_type.compare("echo") == 0) {
+      is_ok = false;
+
+      rapidjson::Document msg_recv;
+      msg_recv.Parse<0>(json_string.c_str());
+
+      verify(msg_recv.HasMember("message"));
+
+      std::string recv_string = msg_recv["message"].GetString();
+
+      verify(send_string.compare(recv_string) == 0);
+
+      is_ok = true;
+      is_working = false;
+    }
+  });
+
+  session->Connect(fun::TransportProtocol::kTcp, 8012, fun::FunEncoding::kJson);
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  is_working = true;
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Connect(fun::TransportProtocol::kTcp);
+
+  {
+    rapidjson::Document msg;
+    msg.SetObject();
+    rapidjson::Value message_node(send_string.c_str(), msg.GetAllocator());
+    msg.AddMember("message", message_node, msg.GetAllocator());
+
+    // Convert JSON document to string
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    msg.Accept(writer);
+    std::string json_string = buffer.GetString();
+
+    session->SendMessage("echo", json_string);
+  }
+
+  is_working = true;
 
   while (is_working) {
     session->Update();
@@ -1114,6 +1243,1769 @@ bool FFunapiSessionTestMulticastReliabilityProtobuf::RunTest(const FString& Para
     fun::FunapiTasks::UpdateAll();
     std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
   }
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestMsgtypeIntegerEchoProtobuf, "Funapi.MsgtypeInteger.I_E_Pbuf", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestMsgtypeIntegerEchoProtobuf::RunTest(const FString& Parameters)
+{
+  std::string send_string = "Protobuf Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), false);
+  bool is_ok = true;
+  bool is_working = true;
+
+  session->AddSessionEventCallback(
+    [&send_string](
+      const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const fun::SessionEventType type,
+      const std::string &session_id,
+      const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::SessionEventType::kOpened) {
+      // send
+      FunMessage msg;
+      msg.set_msgtype2(pbuf_echo.number());
+      PbufEchoMessage *echo = msg.MutableExtension(pbuf_echo);
+      echo->set_msg(send_string.c_str());
+      s->SendMessage(msg);
+    }
+  });
+
+  session->AddTransportEventCallback(
+    [&is_ok, &is_working](
+      const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const fun::TransportEventType type,
+      const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      UE_LOG(LogFunapiExample, Error, TEXT("kConnectionFailed"));
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      UE_LOG(LogFunapiExample, Error, TEXT("kConnectionTimedOut"));
+      is_ok = false;
+      is_working = false;
+    }
+  });
+
+  session->AddProtobufRecvCallback(
+    [&is_working, &is_ok, &send_string](
+      const std::shared_ptr<fun::FunapiSession> &funapi_session,
+      const fun::TransportProtocol transport_protocol,
+      const FunMessage &fun_message)
+  {
+    if (fun_message.msgtype2() == pbuf_echo.number()) {
+      PbufEchoMessage echo = fun_message.GetExtension(pbuf_echo);
+
+      if (send_string.compare(echo.msg()) == 0) {
+        is_ok = true;
+      }
+      else {
+        is_ok = false;
+      }
+    }
+    else {
+      is_ok = false;
+    }
+
+    is_working = false;
+  });
+
+  session->Connect(fun::TransportProtocol::kTcp, 8422, fun::FunEncoding::kProtobuf);
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestMsgtypeIntegerEchoProtobuf2, "Funapi.MsgtypeInteger.I_E_Pbuf_2", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestMsgtypeIntegerEchoProtobuf2::RunTest(const FString& Parameters)
+{
+  int send_count = 100;
+  std::string server_ip = g_server_ip;
+  fun::FunEncoding encoding = fun::FunEncoding::kProtobuf;
+  uint16_t port = 8422;
+  bool with_session_reliability = true;
+
+  auto send_function = [](
+    const std::shared_ptr<fun::FunapiSession>& s,
+    int number)
+  {
+    std::stringstream ss;
+    ss << number;
+
+    // send
+    FunMessage msg;
+    msg.set_msgtype2(pbuf_echo.number());
+    PbufEchoMessage *echo = msg.MutableExtension(pbuf_echo);
+    echo->set_msg(ss.str().c_str());
+    s->SendMessage(msg);
+  };
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), with_session_reliability);
+  bool is_ok = true;
+  bool is_working = true;
+
+  session->AddSessionEventCallback(
+    [&send_function](
+      const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const fun::SessionEventType type,
+      const std::string &session_id,
+      const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::SessionEventType::kOpened) {
+      send_function(s, 0);
+    }
+  });
+
+  session->AddTransportEventCallback(
+    [&is_ok, &is_working](
+      const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const fun::TransportEventType type,
+      const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      is_ok = false;
+      is_working = false;
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddProtobufRecvCallback(
+    [&is_working, &is_ok, &send_function, &send_count](
+      const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol transport_protocol,
+      const FunMessage &fun_message)
+  {
+    if (fun_message.msgtype2() == pbuf_echo.number()) {
+      PbufEchoMessage echo = fun_message.GetExtension(pbuf_echo);
+
+      int number = atoi(echo.msg().c_str());
+      if (number >= send_count) {
+        is_ok = true;
+        is_working = false;
+      }
+      else {
+        send_function(s, number + 1);
+      }
+    }
+    else {
+      is_ok = false;
+      is_working = false;
+      verify(is_ok);
+    }
+  });
+
+  session->Connect(fun::TransportProtocol::kTcp, port, encoding);
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestQueueJson,
+                                 "Funapi.Queue.Q_Json",
+                                 EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestQueueJson::RunTest(const FString& Parameters)
+{
+  std::string send_string = "Json Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), false);
+  bool is_ok = true;
+  bool is_working = true;
+
+  session->AddSessionEventCallback
+  ([&send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::SessionEventType type,
+    const std::string &session_id,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+  });
+
+  session->AddTransportEventCallback
+  ([&is_ok, &is_working]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::TransportEventType type,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      is_ok = false;
+      is_working = false;
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddJsonRecvCallback
+  ([&is_working, &is_ok, &send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const std::string &msg_type, const std::string &json_string)
+  {
+    if (msg_type.compare("echo") == 0) {
+      is_ok = false;
+
+      rapidjson::Document msg_recv;
+      msg_recv.Parse<0>(json_string.c_str());
+
+      verify(msg_recv.HasMember("message"));
+
+      std::string recv_string = msg_recv["message"].GetString();
+
+      verify(send_string.compare(recv_string) == 0);
+
+      is_ok = true;
+      is_working = false;
+    }
+  });
+
+  session->Connect(fun::TransportProtocol::kTcp, 8012, fun::FunEncoding::kJson);
+
+  // send
+  {
+    rapidjson::Document msg;
+    msg.SetObject();
+    rapidjson::Value message_node(send_string.c_str(), msg.GetAllocator());
+    msg.AddMember("message", message_node, msg.GetAllocator());
+
+    // Convert JSON document to string
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    msg.Accept(writer);
+    std::string json_string = buffer.GetString();
+
+    session->SendMessage("echo", json_string);
+  }
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestQueueJson10Times,
+                                 "Funapi.Queue.Q_Json_10",
+                                 EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestQueueJson10Times::RunTest(const FString& Parameters)
+{
+  std::string send_string = "Json Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), false);
+  bool is_ok = true;
+  bool is_working = true;
+
+  session->AddSessionEventCallback
+  ([&send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::SessionEventType type,
+    const std::string &session_id,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+  });
+
+  session->AddTransportEventCallback
+  ([&is_ok, &is_working]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::TransportEventType type,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      is_ok = false;
+      is_working = false;
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddJsonRecvCallback
+  ([&is_working, &is_ok, &send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const std::string &msg_type, const std::string &json_string)
+  {
+    if (msg_type.compare("echo") == 0) {
+      is_ok = false;
+
+      rapidjson::Document msg_recv;
+      msg_recv.Parse<0>(json_string.c_str());
+
+      verify(msg_recv.HasMember("message"));
+
+      std::string recv_string = msg_recv["message"].GetString();
+
+      if (send_string.compare(recv_string) == 0) {
+       is_ok = true;
+       is_working = false;
+      }
+    }
+  });
+
+  session->Connect(fun::TransportProtocol::kTcp, 8012, fun::FunEncoding::kJson);
+
+  // send
+  {
+    for (int i = 0; i < 10; ++i) {
+      // std::to_string is not supported on android, using std::stringstream instead.
+      std::stringstream ss_temp;
+      ss_temp <<  "hello world - " << static_cast<int>(i);
+      std::string temp_string = ss_temp.str();
+
+      rapidjson::Document msg;
+      msg.SetObject();
+      rapidjson::Value message_node(temp_string.c_str(), msg.GetAllocator());
+      msg.AddMember("message", message_node, msg.GetAllocator());
+
+      // Convert JSON document to string
+      rapidjson::StringBuffer buffer;
+      rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+      msg.Accept(writer);
+      std::string json_string = buffer.GetString();
+
+      session->SendMessage("echo", json_string);
+    }
+  }
+  {
+    rapidjson::Document msg;
+    msg.SetObject();
+    rapidjson::Value message_node(send_string.c_str(), msg.GetAllocator());
+    msg.AddMember("message", message_node, msg.GetAllocator());
+
+    // Convert JSON document to string
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    msg.Accept(writer);
+    std::string json_string = buffer.GetString();
+
+    session->SendMessage("echo", json_string);
+  }
+  // //
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestQueueJsonMultitransport,
+                                 "Funapi.Queue.Q_Json_Multitransport",
+                                 EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestQueueJsonMultitransport::RunTest(const FString& Parameters)
+{
+  std::string send_string = "Json Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), false);
+  bool is_ok = true;
+  bool is_working = true;
+
+  session->AddSessionEventCallback
+  ([&send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::SessionEventType type,
+    const std::string &session_id,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+  });
+
+  session->AddTransportEventCallback
+  ([&is_ok, &is_working]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::TransportEventType type,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      is_ok = false;
+      is_working = false;
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddJsonRecvCallback
+  ([&is_working, &is_ok, &send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const std::string &msg_type, const std::string &json_string)
+  {
+    if (msg_type.compare("echo") == 0) {
+      is_ok = false;
+
+      rapidjson::Document msg_recv;
+      msg_recv.Parse<0>(json_string.c_str());
+
+      verify(msg_recv.HasMember("message"));
+
+      std::string recv_string = msg_recv["message"].GetString();
+
+      if (send_string.compare(recv_string) == 0) {
+        is_ok = true;
+        is_working = false;
+      }
+    }
+  });
+
+  session->Connect(fun::TransportProtocol::kTcp, 8012, fun::FunEncoding::kJson);
+  session->Connect(fun::TransportProtocol::kUdp, 8013, fun::FunEncoding::kJson);
+  session->Connect(fun::TransportProtocol::kHttp, 8018, fun::FunEncoding::kJson);
+
+  // send
+  {
+    for (int i = 0; i < 10; ++i) {
+      // std::to_string is not supported on android, using std::stringstream instead.
+      std::stringstream ss_temp;
+      ss_temp <<  "hello world - " << static_cast<int>(i);
+      std::string temp_string = ss_temp.str();
+
+      rapidjson::Document msg;
+      msg.SetObject();
+      rapidjson::Value message_node(temp_string.c_str(), msg.GetAllocator());
+      msg.AddMember("message", message_node, msg.GetAllocator());
+
+      // Convert JSON document to string
+      rapidjson::StringBuffer buffer;
+      rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+      msg.Accept(writer);
+      std::string json_string = buffer.GetString();
+
+      session->SendMessage("echo", json_string, fun::TransportProtocol::kHttp);
+    }
+  }
+  {
+    rapidjson::Document msg;
+    msg.SetObject();
+    rapidjson::Value message_node(send_string.c_str(), msg.GetAllocator());
+    msg.AddMember("message", message_node, msg.GetAllocator());
+
+    // Convert JSON document to string
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    msg.Accept(writer);
+    std::string json_string = buffer.GetString();
+
+    session->SendMessage("echo", json_string, fun::TransportProtocol::kHttp);
+  }
+  // //
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestEncJsonSodium,
+                                 "Funapi.Enc.Json.J_Sodium",
+                                 EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestEncJsonSodium::RunTest(const FString& Parameters)
+{
+  std::string send_string = "Json Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), true);
+  bool is_ok = true;
+  bool is_working = true;
+
+  session->AddSessionEventCallback
+  ([&send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::SessionEventType type,
+    const std::string &session_id,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+  });
+
+  session->AddTransportEventCallback
+  ([&is_ok, &is_working]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::TransportEventType type,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      is_ok = false;
+      is_working = false;
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddJsonRecvCallback
+  ([&is_working, &is_ok, &send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const std::string &msg_type, const std::string &json_string)
+  {
+    if (msg_type.compare("echo") == 0) {
+      is_ok = false;
+
+      rapidjson::Document msg_recv;
+      msg_recv.Parse<0>(json_string.c_str());
+
+      verify(msg_recv.HasMember("message"));
+
+      std::string recv_string = msg_recv["message"].GetString();
+
+      if (send_string.compare(recv_string) == 0) {
+        is_ok = true;
+        is_working = false;
+      }
+    }
+  });
+
+  auto option = fun::FunapiTcpTransportOption::Create();
+  option->SetEncryptionType(fun::EncryptionType::kAes128Encryption,
+                            "0b8504a9c1108584f4f0a631ead8dd548c0101287b91736566e13ead3f008f5d");
+  option->SetEncryptionType(fun::EncryptionType::kChacha20Encryption,
+                            "0b8504a9c1108584f4f0a631ead8dd548c0101287b91736566e13ead3f008f5d");
+  session->Connect(fun::TransportProtocol::kTcp, 9012, fun::FunEncoding::kJson, option);
+
+  // send
+  {
+    for (int i = 0; i < 10; ++i) {
+      // std::to_string is not supported on android, using std::stringstream instead.
+      std::stringstream ss_temp;
+      ss_temp <<  "hello world - " << static_cast<int>(i);
+      std::string temp_string = ss_temp.str();
+
+      rapidjson::Document msg;
+      msg.SetObject();
+      rapidjson::Value message_node(temp_string.c_str(), msg.GetAllocator());
+      msg.AddMember("message", message_node, msg.GetAllocator());
+
+      // Convert JSON document to string
+      rapidjson::StringBuffer buffer;
+      rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+      msg.Accept(writer);
+      std::string json_string = buffer.GetString();
+
+      session->SendMessage("echo", json_string);
+    }
+  }
+  {
+    rapidjson::Document msg;
+    msg.SetObject();
+    rapidjson::Value message_node(send_string.c_str(), msg.GetAllocator());
+    msg.AddMember("message", message_node, msg.GetAllocator());
+
+    // Convert JSON document to string
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    msg.Accept(writer);
+    std::string json_string = buffer.GetString();
+
+    session->SendMessage("echo", json_string);
+  }
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestEncJsonChacha20,
+                                 "Funapi.Enc.Json.J_Chacha20",
+                                 EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestEncJsonChacha20::RunTest(const FString& Parameters)
+{
+  std::string send_string = "Json Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), true);
+  bool is_ok = true;
+  bool is_working = true;
+
+  session->AddSessionEventCallback
+  ([&send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::SessionEventType type,
+    const std::string &session_id,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+  });
+
+  session->AddTransportEventCallback
+  ([&is_ok, &is_working]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::TransportEventType type,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      is_ok = false;
+      is_working = false;
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddJsonRecvCallback
+  ([&is_working, &is_ok, &send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const std::string &msg_type, const std::string &json_string)
+  {
+    if (msg_type.compare("echo") == 0) {
+      is_ok = false;
+
+      rapidjson::Document msg_recv;
+      msg_recv.Parse<0>(json_string.c_str());
+
+      verify(msg_recv.HasMember("message"));
+
+      std::string recv_string = msg_recv["message"].GetString();
+
+      if (send_string.compare(recv_string) == 0) {
+        is_ok = true;
+        is_working = false;
+      }
+    }
+  });
+
+  auto option = fun::FunapiTcpTransportOption::Create();
+  option->SetEncryptionType(fun::EncryptionType::kChacha20Encryption,
+                            "0b8504a9c1108584f4f0a631ead8dd548c0101287b91736566e13ead3f008f5d");
+  session->Connect(fun::TransportProtocol::kTcp, 8712, fun::FunEncoding::kJson, option);
+
+  // send
+  {
+    for (int i = 0; i < 10; ++i) {
+      // std::to_string is not supported on android, using std::stringstream instead.
+      std::stringstream ss_temp;
+      ss_temp <<  "hello world - " << static_cast<int>(i);
+      std::string temp_string = ss_temp.str();
+
+      rapidjson::Document msg;
+      msg.SetObject();
+      rapidjson::Value message_node(temp_string.c_str(), msg.GetAllocator());
+      msg.AddMember("message", message_node, msg.GetAllocator());
+
+      // Convert JSON document to string
+      rapidjson::StringBuffer buffer;
+      rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+      msg.Accept(writer);
+      std::string json_string = buffer.GetString();
+
+      session->SendMessage("echo", json_string);
+    }
+  }
+  {
+    rapidjson::Document msg;
+    msg.SetObject();
+    rapidjson::Value message_node(send_string.c_str(), msg.GetAllocator());
+    msg.AddMember("message", message_node, msg.GetAllocator());
+
+    // Convert JSON document to string
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    msg.Accept(writer);
+    std::string json_string = buffer.GetString();
+
+    session->SendMessage("echo", json_string);
+  }
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestEncProtobufChacha20,
+                                 "Funapi.Enc.Protobuf.P_Chacha20",
+                                 EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestEncProtobufChacha20::RunTest(const FString& Parameters)
+{
+  std::string send_string = "Protobuf Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), true);
+  bool is_ok = true;
+  bool is_working = true;
+
+  session->AddSessionEventCallback
+  ([&send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::SessionEventType type,
+    const std::string &session_id,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+  });
+
+  session->AddTransportEventCallback
+  ([&is_ok, &is_working]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::TransportEventType type,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      is_ok = false;
+      is_working = false;
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddProtobufRecvCallback
+  ([&is_working, &is_ok, &send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol transport_protocol,
+    const FunMessage &fun_message)
+  {
+    if (fun_message.msgtype().compare("pbuf_echo") == 0) {
+      PbufEchoMessage echo = fun_message.GetExtension(pbuf_echo);
+
+      if (send_string.compare(echo.msg()) == 0) {
+        is_ok = true;
+        is_working = false;
+      }
+    }
+    else {
+      is_ok = false;
+      is_working = false;
+      verify(is_ok);
+    }
+  });
+
+  auto option = fun::FunapiTcpTransportOption::Create();
+  option->SetEncryptionType(fun::EncryptionType::kChacha20Encryption,
+                            "0b8504a9c1108584f4f0a631ead8dd548c0101287b91736566e13ead3f008f5d");
+  session->Connect(fun::TransportProtocol::kTcp, 8722, fun::FunEncoding::kProtobuf, option);
+
+  // send
+  {
+    for (int i = 0; i < 10; ++i) {
+      // std::to_string is not supported on android, using std::stringstream instead.
+      std::stringstream ss_temp;
+      ss_temp << "hello proto - " << static_cast<int>(i);
+      std::string temp_string = ss_temp.str();
+
+      FunMessage msg;
+      msg.set_msgtype("pbuf_echo");
+      PbufEchoMessage *echo = msg.MutableExtension(pbuf_echo);
+      echo->set_msg(temp_string.c_str());
+
+      session->SendMessage(msg);
+    }
+  }
+  {
+    FunMessage msg;
+    msg.set_msgtype("pbuf_echo");
+    PbufEchoMessage *echo = msg.MutableExtension(pbuf_echo);
+    echo->set_msg(send_string.c_str());
+    session->SendMessage(msg);
+  }
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestEncJsonAes128,
+                                 "Funapi.Enc.Json.J_Aes128",
+                                 EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestEncJsonAes128::RunTest(const FString& Parameters)
+{
+  std::string send_string = "Json Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), true);
+  bool is_ok = true;
+  bool is_working = true;
+
+  session->AddSessionEventCallback
+  ([&send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::SessionEventType type,
+    const std::string &session_id,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+  });
+
+  session->AddTransportEventCallback
+  ([&is_ok, &is_working]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::TransportEventType type,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      is_ok = false;
+      is_working = false;
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddJsonRecvCallback
+  ([&is_working, &is_ok, &send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const std::string &msg_type, const std::string &json_string)
+  {
+    if (msg_type.compare("echo") == 0) {
+      is_ok = false;
+
+      rapidjson::Document msg_recv;
+      msg_recv.Parse<0>(json_string.c_str());
+
+      verify(msg_recv.HasMember("message"));
+
+      std::string recv_string = msg_recv["message"].GetString();
+
+      if (send_string.compare(recv_string) == 0) {
+        is_ok = true;
+        is_working = false;
+      }
+    }
+  });
+
+  auto option = fun::FunapiTcpTransportOption::Create();
+  option->SetEncryptionType(fun::EncryptionType::kAes128Encryption,
+                            "0b8504a9c1108584f4f0a631ead8dd548c0101287b91736566e13ead3f008f5d");
+  session->Connect(fun::TransportProtocol::kTcp, 8812, fun::FunEncoding::kJson, option);
+
+  // send
+  {
+    for (int i = 0; i < 10; ++i) {
+      // std::to_string is not supported on android, using std::stringstream instead.
+      std::stringstream ss_temp;
+      ss_temp <<  "hello world - " << static_cast<int>(i);
+      std::string temp_string = ss_temp.str();
+
+      rapidjson::Document msg;
+      msg.SetObject();
+      rapidjson::Value message_node(temp_string.c_str(), msg.GetAllocator());
+      msg.AddMember("message", message_node, msg.GetAllocator());
+
+      // Convert JSON document to string
+      rapidjson::StringBuffer buffer;
+      rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+      msg.Accept(writer);
+      std::string json_string = buffer.GetString();
+
+      session->SendMessage("echo", json_string);
+    }
+  }
+  {
+    rapidjson::Document msg;
+    msg.SetObject();
+    rapidjson::Value message_node(send_string.c_str(), msg.GetAllocator());
+    msg.AddMember("message", message_node, msg.GetAllocator());
+
+    // Convert JSON document to string
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    msg.Accept(writer);
+    std::string json_string = buffer.GetString();
+
+    session->SendMessage("echo", json_string);
+  }
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestEncProtobufAes128,
+                                 "Funapi.Enc.Protobuf.P_Aes128",
+                                 EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestEncProtobufAes128::RunTest(const FString& Parameters)
+{
+  std::string send_string = "Protobuf Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), true);
+  bool is_ok = true;
+  bool is_working = true;
+
+  session->AddSessionEventCallback
+  ([&send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::SessionEventType type,
+    const std::string &session_id,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+  });
+
+  session->AddTransportEventCallback
+  ([&is_ok, &is_working]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::TransportEventType type,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      is_ok = false;
+      is_working = false;
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddProtobufRecvCallback
+  ([&is_working, &is_ok, &send_string]
+   (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol transport_protocol,
+    const FunMessage &fun_message)
+  {
+    if (fun_message.msgtype().compare("pbuf_echo") == 0) {
+      PbufEchoMessage echo = fun_message.GetExtension(pbuf_echo);
+
+      if (send_string.compare(echo.msg()) == 0) {
+        is_ok = true;
+        is_working = false;
+      }
+    }
+    else {
+      is_ok = false;
+      is_working = false;
+      verify(is_ok);
+    }
+  });
+
+  auto option = fun::FunapiTcpTransportOption::Create();
+  option->SetEncryptionType(fun::EncryptionType::kAes128Encryption,
+                            "0b8504a9c1108584f4f0a631ead8dd548c0101287b91736566e13ead3f008f5d");
+  session->Connect(fun::TransportProtocol::kTcp, 8822, fun::FunEncoding::kProtobuf, option);
+
+  // send
+  {
+    for (int i = 0; i < 10; ++i) {
+      // std::to_string is not supported on android, using std::stringstream instead.
+      std::stringstream ss_temp;
+      ss_temp << "hello proto - " << static_cast<int>(i);
+      std::string temp_string = ss_temp.str();
+
+      FunMessage msg;
+      msg.set_msgtype("pbuf_echo");
+      PbufEchoMessage *echo = msg.MutableExtension(pbuf_echo);
+      echo->set_msg(temp_string.c_str());
+
+      session->SendMessage(msg);
+    }
+  }
+  {
+    FunMessage msg;
+    msg.set_msgtype("pbuf_echo");
+    PbufEchoMessage *echo = msg.MutableExtension(pbuf_echo);
+    echo->set_msg(send_string.c_str());
+    session->SendMessage(msg);
+  }
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestMultithread, 
+  "Funapi.Multithread.MT_Session",
+  EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestMultithread::RunTest(const FString& Parameters) {
+  const int kMaxThread = 2;
+  const int kMaxCount = 50;
+  std::vector<std::thread> temp_thread(kMaxThread);
+  std::vector<bool> v_completed(kMaxThread);
+  std::mutex complete_mutex;
+
+  auto send_message = []
+  (const std::shared_ptr<fun::FunapiSession>&s,
+    const fun::TransportProtocol protocol,
+    const std::string &temp_string)
+  {
+    if (s->GetEncoding(protocol) == fun::FunEncoding::kJson) {
+      rapidjson::Document msg;
+      msg.SetObject();
+      rapidjson::Value message_node(temp_string.c_str(), msg.GetAllocator());
+      msg.AddMember("message", message_node, msg.GetAllocator());
+
+      // Convert JSON document to string
+      rapidjson::StringBuffer buffer;
+      rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+      msg.Accept(writer);
+      std::string json_string = buffer.GetString();
+
+      s->SendMessage("echo", json_string);
+    }
+    else if (s->GetEncoding(protocol) == fun::FunEncoding::kProtobuf) {
+      FunMessage msg;
+      msg.set_msgtype("pbuf_echo");
+      PbufEchoMessage *echo = msg.MutableExtension(pbuf_echo);
+      echo->set_msg(temp_string.c_str());
+
+      s->SendMessage(msg);
+    }
+  };
+
+  auto test_funapi_session =
+    [&send_message, kMaxCount, &complete_mutex, &v_completed]
+  (const int index,
+    const std::string &server_ip,
+    const int server_port,
+    const fun::TransportProtocol protocol,
+    const fun::FunEncoding encoding,
+    const bool use_session_reliability)
+  {
+
+    auto session = fun::FunapiSession::Create(server_ip.c_str(), use_session_reliability);
+    bool is_ok = false;
+    bool is_working = true;
+
+    // add callback
+    session->AddSessionEventCallback
+    ([index, &send_message]
+    (const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const fun::SessionEventType type,
+      const std::string &session_id,
+      const std::shared_ptr<fun::FunapiError> &error)
+    {
+      if (type == fun::SessionEventType::kOpened) {
+        std::stringstream ss_temp;
+        ss_temp << static_cast<int>(0);
+        std::string temp_string = ss_temp.str();
+        send_message(s, protocol, temp_string);
+      }
+    });
+
+    session->AddTransportEventCallback
+    ([index, &is_ok, &is_working]
+    (const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const fun::TransportEventType type,
+      const std::shared_ptr<fun::FunapiError> &error)
+    {
+      if (type == fun::TransportEventType::kConnectionFailed ||
+        type == fun::TransportEventType::kConnectionTimedOut ||
+        type == fun::TransportEventType::kDisconnected) {
+        is_ok = false;
+        is_working = false;
+      }
+    });
+
+    session->AddJsonRecvCallback
+    ([index, &send_message, &is_working, &is_ok, kMaxCount]
+    (const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const std::string &msg_type,
+      const std::string &json_string)
+    {
+      if (msg_type.compare("echo") == 0) {
+        rapidjson::Document msg_recv;
+        msg_recv.Parse<0>(json_string.c_str());
+
+        int count = 0;
+        if (msg_recv.HasMember("message")) {
+          count = atoi(msg_recv["message"].GetString());
+          printf("(%d) echo - %d\n", index, count);
+          ++count;
+          if (count > kMaxCount) {
+            is_working = false;
+            is_ok = true;
+            return;
+          }
+        }
+
+        std::stringstream ss_temp;
+        ss_temp << static_cast<int>(count);
+        std::string temp_string = ss_temp.str();
+        send_message(s, protocol, temp_string);
+      }
+    });
+
+    session->AddProtobufRecvCallback
+    ([index, kMaxCount, &send_message, &is_working, &is_ok]
+    (const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const FunMessage &message)
+    {
+      if (message.msgtype().compare("pbuf_echo") == 0) {
+        PbufEchoMessage echo_recv = message.GetExtension(pbuf_echo);
+
+        int count = 0;
+        count = atoi(echo_recv.msg().c_str());
+        printf("(%d) echo - %d\n", index, count);
+        ++count;
+        if (count > kMaxCount) {
+          is_working = false;
+          is_ok = true;
+          return;
+        }
+
+        std::stringstream ss_temp;
+        ss_temp << static_cast<int>(count);
+        std::string temp_string = ss_temp.str();
+        send_message(s, protocol, temp_string);
+      }
+    });
+
+    auto option = fun::FunapiTcpTransportOption::Create();
+    option->SetEnablePing(true);
+    option->SetDisableNagle(true);
+    session->Connect(fun::TransportProtocol::kTcp, server_port, encoding, option);
+
+    while (is_working) {
+      session->Update();
+      std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+    }
+
+    session->Close();
+
+    verify(is_ok);
+
+    {
+      std::unique_lock<std::mutex> lock(complete_mutex);
+      v_completed[index] = true;
+    }
+
+    printf("(%d) end function\n", index);
+  };
+
+  for (int i = 0; i < kMaxThread; ++i) {
+    fun::TransportProtocol protocol = fun::TransportProtocol::kTcp;
+    fun::FunEncoding encoding = fun::FunEncoding::kProtobuf;
+    std::string server_ip = g_server_ip;
+    int server_port = 8022;
+    bool with_session_reliability = false;
+
+    v_completed[i] = false;
+
+    temp_thread[i] =
+      std::thread
+      ([&test_funapi_session, i, server_ip, server_port, protocol, encoding, with_session_reliability]()
+    {
+      test_funapi_session(i, server_ip, server_port, protocol, encoding, with_session_reliability);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  while (true) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    {
+      std::unique_lock<std::mutex> lock(complete_mutex);
+      bool complete = true;
+      for (int i = 0; i<kMaxThread; ++i) {
+        if (v_completed[i] == false) {
+          complete = false;
+          break;
+        }
+      }
+
+      if (complete) {
+        break;
+      }
+    }
+  }
+
+  for (int i = 0; i < kMaxThread; ++i) {
+    if (temp_thread[i].joinable()) {
+      temp_thread[i].join();
+    }
+  }
+
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestMultithreadUpdateAll, "Funapi.Multithread.MT_UpdateAll", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestMultithreadUpdateAll::RunTest(const FString& Parameters) {
+  const int kMaxThread = 2;
+  const int kMaxCount = 50;
+  std::vector<std::thread> temp_thread(kMaxThread);
+  std::vector<bool> v_completed(kMaxThread);
+  std::mutex complete_mutex;
+
+  auto send_message = []
+  (const std::shared_ptr<fun::FunapiSession>&s,
+    const fun::TransportProtocol protocol,
+    const std::string &temp_string)
+  {
+    if (s->GetEncoding(protocol) == fun::FunEncoding::kJson) {
+      rapidjson::Document msg;
+      msg.SetObject();
+      rapidjson::Value message_node(temp_string.c_str(), msg.GetAllocator());
+      msg.AddMember("message", message_node, msg.GetAllocator());
+
+      // Convert JSON document to string
+      rapidjson::StringBuffer buffer;
+      rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+      msg.Accept(writer);
+      std::string json_string = buffer.GetString();
+
+      s->SendMessage("echo", json_string);
+    }
+    else if (s->GetEncoding(protocol) == fun::FunEncoding::kProtobuf) {
+      FunMessage msg;
+      msg.set_msgtype("pbuf_echo");
+      PbufEchoMessage *echo = msg.MutableExtension(pbuf_echo);
+      echo->set_msg(temp_string.c_str());
+
+      s->SendMessage(msg);
+    }
+  };
+
+  auto test_funapi_session =
+    [&send_message, kMaxCount, &complete_mutex, &v_completed]
+  (const int index,
+    const std::string &server_ip,
+    const int server_port,
+    const fun::TransportProtocol protocol,
+    const fun::FunEncoding encoding,
+    const bool use_session_reliability)
+  {
+
+    auto session = fun::FunapiSession::Create(server_ip.c_str(), use_session_reliability);
+    bool is_ok = false;
+    bool is_working = true;
+
+    // add callback
+    session->AddSessionEventCallback
+    ([index, &send_message]
+    (const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const fun::SessionEventType type,
+      const std::string &session_id,
+      const std::shared_ptr<fun::FunapiError> &error)
+    {
+      if (type == fun::SessionEventType::kOpened) {
+        std::stringstream ss_temp;
+        ss_temp << static_cast<int>(0);
+        std::string temp_string = ss_temp.str();
+        send_message(s, protocol, temp_string);
+      }
+    });
+
+    session->AddTransportEventCallback
+    ([index, &is_ok, &is_working]
+    (const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const fun::TransportEventType type,
+      const std::shared_ptr<fun::FunapiError> &error)
+    {
+      if (type == fun::TransportEventType::kConnectionFailed ||
+        type == fun::TransportEventType::kConnectionTimedOut ||
+        type == fun::TransportEventType::kDisconnected) {
+        is_ok = false;
+        is_working = false;
+      }
+    });
+
+    session->AddJsonRecvCallback
+    ([index, &send_message, &is_working, &is_ok, kMaxCount]
+    (const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const std::string &msg_type,
+      const std::string &json_string)
+    {
+      if (msg_type.compare("echo") == 0) {
+        rapidjson::Document msg_recv;
+        msg_recv.Parse<0>(json_string.c_str());
+
+        int count = 0;
+        if (msg_recv.HasMember("message")) {
+          count = atoi(msg_recv["message"].GetString());
+          printf("(%d) echo - %d\n", index, count);
+          ++count;
+          if (count > kMaxCount) {
+            is_working = false;
+            is_ok = true;
+            return;
+          }
+        }
+
+        std::stringstream ss_temp;
+        ss_temp << static_cast<int>(count);
+        std::string temp_string = ss_temp.str();
+        send_message(s, protocol, temp_string);
+      }
+    });
+
+    session->AddProtobufRecvCallback
+    ([index, kMaxCount, &send_message, &is_working, &is_ok]
+    (const std::shared_ptr<fun::FunapiSession> &s,
+      const fun::TransportProtocol protocol,
+      const FunMessage &message)
+    {
+      if (message.msgtype().compare("pbuf_echo") == 0) {
+        PbufEchoMessage echo_recv = message.GetExtension(pbuf_echo);
+
+        int count = 0;
+        count = atoi(echo_recv.msg().c_str());
+        printf("(%d) echo - %d\n", index, count);
+        ++count;
+        if (count > kMaxCount) {
+          is_working = false;
+          is_ok = true;
+          return;
+        }
+
+        std::stringstream ss_temp;
+        ss_temp << static_cast<int>(count);
+        std::string temp_string = ss_temp.str();
+        send_message(s, protocol, temp_string);
+      }
+    });
+
+    auto option = fun::FunapiTcpTransportOption::Create();
+    option->SetEnablePing(true);
+    option->SetDisableNagle(true);
+    session->Connect(fun::TransportProtocol::kTcp, server_port, encoding, option);
+
+    while (is_working) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+    }
+
+    session->Close();
+
+    verify(is_ok);
+
+    {
+      std::unique_lock<std::mutex> lock(complete_mutex);
+      v_completed[index] = true;
+    }
+
+    printf("(%d) end function\n", index);
+  };
+
+  for (int i = 0; i < kMaxThread; ++i) {
+    fun::TransportProtocol protocol = fun::TransportProtocol::kTcp;
+    fun::FunEncoding encoding = fun::FunEncoding::kProtobuf;
+    std::string server_ip = g_server_ip;
+    int server_port = 8022;
+    bool with_session_reliability = false;
+
+    v_completed[i] = false;
+
+    temp_thread[i] =
+      std::thread
+      ([&test_funapi_session, i, server_ip, server_port, protocol, encoding, with_session_reliability]()
+    {
+      test_funapi_session(i, server_ip, server_port, protocol, encoding, with_session_reliability);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  while (true) {
+    fun::FunapiSession::UpdateAll();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    {
+      std::unique_lock<std::mutex> lock(complete_mutex);
+      bool complete = true;
+      for (int i = 0; i<kMaxThread; ++i) {
+        if (v_completed[i] == false) {
+          complete = false;
+          break;
+        }
+      }
+
+      if (complete) {
+        break;
+      }
+    }
+  }
+
+  for (int i = 0; i < kMaxThread; ++i) {
+    if (temp_thread[i].joinable()) {
+      temp_thread[i].join();
+    }
+  }
+
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestReconnectTcpSend10Times, "Funapi.Reconnect.TcpSend10Times", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestReconnectTcpSend10Times::RunTest(const FString& Parameters) {
+  std::string send_string = "Json Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), false);
+  bool is_ok = true;
+  bool is_working = true;
+
+  auto send_function =
+    []
+  (const std::shared_ptr<fun::FunapiSession>& s,
+    int number)
+  {
+    rapidjson::Document msg;
+    msg.SetObject();
+
+    std::stringstream ss;
+    ss << number;
+
+    std::string temp_messsage = ss.str();
+    rapidjson::Value message_node(temp_messsage.c_str(), msg.GetAllocator());
+    msg.AddMember(rapidjson::StringRef("message"), message_node, msg.GetAllocator());
+
+    // Convert JSON document to string
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    msg.Accept(writer);
+    std::string json_string = buffer.GetString();
+
+    s->SendMessage("echo", json_string);
+  };
+
+  session->AddSessionEventCallback
+  ([&send_string]
+  (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::SessionEventType type,
+    const std::string &session_id,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+  });
+
+  session->AddTransportEventCallback
+  ([&is_ok, &is_working]
+  (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::TransportEventType type,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kStopped) {
+      is_ok = true;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kDisconnected) {
+      is_ok = true;
+      is_working = false;
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddJsonRecvCallback
+  ([&is_working, &is_ok, &send_string]
+  (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const std::string &msg_type, const std::string &json_string)
+  {
+    if (msg_type.compare("echo") == 0) {
+      rapidjson::Document msg_recv;
+      msg_recv.Parse<0>(json_string.c_str());
+
+      if (msg_recv.HasMember("message")) {
+        std::string recv_string = msg_recv["message"].GetString();
+        if (send_string.compare(recv_string) == 0) {
+          is_ok = true;
+          is_working = false;
+        }
+      }
+    }
+  });
+
+  session->Connect(fun::TransportProtocol::kTcp, 8012, fun::FunEncoding::kJson);
+
+  for (int i = 0; i<10; ++i) send_function(session, i);
+
+  session->Close();
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  verify(is_ok);
+
+  session->Connect(fun::TransportProtocol::kTcp);
+
+  {
+    rapidjson::Document msg;
+    msg.SetObject();
+    rapidjson::Value message_node(send_string.c_str(), msg.GetAllocator());
+    msg.AddMember("message", message_node, msg.GetAllocator());
+
+    // Convert JSON document to string
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    msg.Accept(writer);
+    std::string json_string = buffer.GetString();
+
+    session->SendMessage("echo", json_string);
+  }
+
+  is_working = true;
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
+
+  return is_ok;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunapiSessionTestReconnectHttpSend10Times, "Funapi.Reconnect.HttpSend10Times", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFunapiSessionTestReconnectHttpSend10Times::RunTest(const FString& Parameters) {
+  std::string send_string = "Json Echo Message";
+  std::string server_ip = g_server_ip;
+
+  auto session = fun::FunapiSession::Create(server_ip.c_str(), false);
+  bool is_ok = true;
+  bool is_working = true;
+
+  auto send_function =
+    [](const std::shared_ptr<fun::FunapiSession>& s,
+      int number)
+  {
+    rapidjson::Document msg;
+    msg.SetObject();
+
+    std::stringstream ss;
+    ss << number;
+
+    std::string temp_messsage = ss.str();
+    rapidjson::Value message_node(temp_messsage.c_str(), msg.GetAllocator());
+    msg.AddMember(rapidjson::StringRef("message"), message_node, msg.GetAllocator());
+
+    // Convert JSON document to string
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    msg.Accept(writer);
+    std::string json_string = buffer.GetString();
+
+    s->SendMessage("echo", json_string);
+  };
+
+  session->AddSessionEventCallback
+  ([&send_string]
+  (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::SessionEventType type,
+    const std::string &session_id,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+  });
+
+  session->AddTransportEventCallback
+  ([&is_ok, &is_working]
+  (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const fun::TransportEventType type,
+    const std::shared_ptr<fun::FunapiError> &error)
+  {
+    if (type == fun::TransportEventType::kConnectionFailed) {
+      printf("fun::TransportEventType::kConnectionFailed\n");
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kConnectionTimedOut) {
+      printf("fun::TransportEventType::kConnectionTimedOut\n");
+      is_ok = false;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kStopped) {
+      printf("fun::TransportEventType::kStopped\n");
+      is_ok = true;
+      is_working = false;
+    }
+    else if (type == fun::TransportEventType::kStarted) {
+      printf("fun::TransportEventType::kStarted\n");
+    }
+    else if (type == fun::TransportEventType::kDisconnected) {
+      printf("fun::TransportEventType::kDisconnected\n");
+    }
+
+    verify(type != fun::TransportEventType::kConnectionFailed);
+    verify(type != fun::TransportEventType::kConnectionTimedOut);
+  });
+
+  session->AddJsonRecvCallback
+  ([&is_working, &is_ok, &send_string]
+  (const std::shared_ptr<fun::FunapiSession> &s,
+    const fun::TransportProtocol protocol,
+    const std::string &msg_type, const std::string &json_string)
+  {
+    if (msg_type.compare("echo") == 0) {
+      rapidjson::Document msg_recv;
+      msg_recv.Parse<0>(json_string.c_str());
+
+      if (msg_recv.HasMember("message")) {
+        std::string recv_string = msg_recv["message"].GetString();
+        if (send_string.compare(recv_string) == 0) {
+          is_ok = true;
+          is_working = false;
+        }
+      }
+    }
+  });
+
+  session->Connect(fun::TransportProtocol::kHttp, 8018, fun::FunEncoding::kJson);
+
+  for (int i = 0; i<10; ++i) send_function(session, i);
+
+  session->Close();
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  verify(is_ok);
+
+  session->Connect(fun::TransportProtocol::kHttp);
+
+  {
+    rapidjson::Document msg;
+    msg.SetObject();
+    rapidjson::Value message_node(send_string.c_str(), msg.GetAllocator());
+    msg.AddMember("message", message_node, msg.GetAllocator());
+
+    // Convert JSON document to string
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    msg.Accept(writer);
+    std::string json_string = buffer.GetString();
+
+    session->SendMessage("echo", json_string);
+  }
+
+  is_working = true;
+
+  while (is_working) {
+    session->Update();
+    std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
+  }
+
+  session->Close();
 
   return is_ok;
 }

@@ -15,6 +15,7 @@
 #include <string>
 
 #include "funapi_transport.h"
+#include "funapi_encryption.h"
 #include "funapi/network/ping_message.pb.h"
 #include "funapi/service/redirect_message.pb.h"
 #include "funapi/management/maintenance_message.pb.h"
@@ -38,6 +39,93 @@ enum class FUNAPI_API TransportEventType : int {
   kConnectionFailed,
   kConnectionTimedOut,
   kDisconnected,
+};
+
+
+inline FUNAPI_API std::string SessionEventTypeToString(SessionEventType type) {
+  std::string ret("");
+
+  switch (type) {
+    case SessionEventType::kOpened:
+      ret = "Opened";
+      break;
+
+    case SessionEventType::kClosed:
+      ret = "Closed";
+      break;
+
+    case SessionEventType::kChanged:
+      ret = "Changed";
+      break;
+
+    case SessionEventType::kRedirectStarted:
+      ret = "RedirectStarted";
+      break;
+
+    case SessionEventType::kRedirectSucceeded:
+      ret = "RedirectSucceeded";
+      break;
+
+    case SessionEventType::kRedirectFailed:
+      ret = "RedirectFailed";
+      break;
+
+    default:
+      assert(false);
+  }
+
+  return ret;
+}
+
+
+inline FUNAPI_API std::string TransportEventTypeToString(TransportEventType type) {
+  std::string ret("");
+
+  switch (type) {
+    case TransportEventType::kStarted:
+      ret = "Started";
+      break;
+
+    case TransportEventType::kStopped:
+      ret = "Stopped";
+      break;
+
+    case TransportEventType::kConnectionFailed:
+      ret = "ConnectionFailed";
+      break;
+
+    case TransportEventType::kConnectionTimedOut:
+      ret = "ConnectionTimedOut";
+      break;
+
+    case TransportEventType::kDisconnected:
+      ret = "Disconnected";
+      break;
+
+    default:
+      assert(false);
+  }
+
+  return ret;
+}
+
+
+class FunapiSessionOptionImpl;
+class FUNAPI_API FunapiSessionOption : public std::enable_shared_from_this<FunapiSessionOption> {
+ public:
+  FunapiSessionOption();
+  virtual ~FunapiSessionOption() = default;
+
+  static std::shared_ptr<FunapiSessionOption> Create();
+
+  void SetSessionReliability(const bool reliability);
+  bool GetSessionReliability();
+
+  void SetSendSessionIdOnlyOnce(const bool once);
+  bool GetSendSessionIdOnlyOnce();
+
+ private:
+  std::shared_ptr<FunapiSessionOptionImpl> impl_;
 };
 
 
@@ -67,15 +155,20 @@ class FUNAPI_API FunapiSession : public std::enable_shared_from_this<FunapiSessi
   typedef std::function<void(const std::shared_ptr<FunapiSession>&,
                              const std::string&)> RecvTimeoutHandler;
 
+  typedef std::function<void(const std::shared_ptr<FunapiSession>&,
+                             const int32_t)> RecvTimeoutIntHandler;
+
   typedef std::function<std::shared_ptr<FunapiTransportOption>(const TransportProtocol,
                                                                const std::string&)> TransportOptionHandler;
 
   FunapiSession() = delete;
-  FunapiSession(const char* hostname_or_ip, bool reliability = false);
+  FunapiSession(const char* hostname_or_ip, std::shared_ptr<FunapiSessionOption> option);
   virtual ~FunapiSession();
 
   static std::shared_ptr<FunapiSession> Create(const char* hostname_or_ip,
                                                bool reliability = false);
+  static std::shared_ptr<FunapiSession> Create(const char* hostname_or_ip,
+                                               std::shared_ptr<FunapiSessionOption> option);
 
   void Connect(const TransportProtocol protocol,
                int port,
@@ -88,10 +181,12 @@ class FUNAPI_API FunapiSession : public std::enable_shared_from_this<FunapiSessi
 
   void SendMessage(const std::string &msg_type,
                    const std::string &json_string,
-                   const TransportProtocol protocol = TransportProtocol::kDefault);
+                   const TransportProtocol protocol = TransportProtocol::kDefault,
+                   const EncryptionType encryption_type = EncryptionType::kDefaultEncryption);
 
   void SendMessage(const FunMessage &message,
-                   const TransportProtocol protocol = TransportProtocol::kDefault);
+                   const TransportProtocol protocol = TransportProtocol::kDefault,
+                   const EncryptionType encryption_type = EncryptionType::kDefaultEncryption);
 
   bool IsConnected(const TransportProtocol protocol) const;
   bool IsConnected() const;
@@ -113,6 +208,10 @@ class FUNAPI_API FunapiSession : public std::enable_shared_from_this<FunapiSessi
   void AddRecvTimeoutCallback(const RecvTimeoutHandler &handler);
   void SetRecvTimeout(const std::string &msg_type, const int seconds);
   void EraseRecvTimeout(const std::string &msg_type);
+
+  void AddRecvTimeoutCallback(const RecvTimeoutIntHandler &handler);
+  void SetRecvTimeout(const int32_t msg_type, const int seconds);
+  void EraseRecvTimeout(const int32_t msg_type);
 
   void SetTransportOptionCallback(const TransportOptionHandler &handler);
 

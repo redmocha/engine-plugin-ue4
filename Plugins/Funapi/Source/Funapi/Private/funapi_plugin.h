@@ -1,4 +1,4 @@
-// Copyright (C) 2013-2016 iFunFactory Inc. All Rights Reserved.
+// Copyright (C) 2013-2017 iFunFactory Inc. All Rights Reserved.
 //
 // This work is confidential and proprietary to iFunFactory Inc. and
 // must not be used, disclosed, copied, or distributed without the prior
@@ -11,6 +11,10 @@
 
 #ifdef FUNAPI_UE4
 #include "FunapiPrivatePCH.h"
+#endif
+
+#ifdef FUNAPI_COCOS2D
+#include "cocos2d.h"
 #endif
 
 #ifdef FUNAPI_UE4_PLATFORM_WINDOWS
@@ -55,7 +59,6 @@
 #include "json/stringbuffer.h"
 #include "json/writer.h"
 #include "json/document.h"
-#include "network/HttpClient.h"
 #endif
 
 #ifdef FUNAPI_UE4

@@ -62,19 +62,19 @@ inline FUNAPI_API std::string TransportProtocolToString(TransportProtocol protoc
 
   switch (protocol) {
     case TransportProtocol::kDefault:
-      ret = "Unknown";
+      ret = "Default";
       break;
 
     case TransportProtocol::kTcp:
-      ret = "Tcp";
+      ret = "TCP";
       break;
 
     case TransportProtocol::kUdp:
-      ret = "Udp";
+      ret = "UDP";
       break;
 
     case TransportProtocol::kHttp:
-      ret = "Http";
+      ret = "HTTP";
       break;
 
     default:
@@ -93,12 +93,43 @@ enum class FUNAPI_API FunEncoding
   kProtobuf
 };
 
+
+inline FUNAPI_API std::string EncodingToString(FunEncoding encoding) {
+  std::string ret("");
+
+  switch (encoding) {
+    case FunEncoding::kJson:
+      ret = "JSON";
+      break;
+
+    case FunEncoding::kProtobuf:
+      ret = "Protobuf";
+      break;
+
+    default:
+      assert(false);
+  }
+
+  return ret;
+}
+
+
 enum class FUNAPI_API EncryptionType : int;
 
 
 class FunapiErrorImpl;
 class FUNAPI_API FunapiError : public std::enable_shared_from_this<FunapiError> {
  public:
+  enum class ErrorType : int {
+    kDefault,
+    kRedirect,
+    kSocket,
+    kCurl,
+    kSeq,
+    kPing,
+  };
+
+  // legacy
   enum class ErrorCode : int {
     kNone,
     kRedirectConnectInvalidToken,
@@ -107,12 +138,18 @@ class FUNAPI_API FunapiError : public std::enable_shared_from_this<FunapiError> 
   };
 
   FunapiError() = delete;
-  FunapiError(ErrorCode code);
+  FunapiError(const ErrorType type, const int code, const std::string& error_string);
   virtual ~FunapiError() = default;
 
-  static std::shared_ptr<FunapiError> Create(ErrorCode error_code);
+  static std::shared_ptr<FunapiError> Create(const ErrorType type, const int code, const std::string& error_string = "");
+  static std::shared_ptr<FunapiError> Create(const ErrorType type, const ErrorCode code);
 
-  ErrorCode GetErrorCode();
+  ErrorType GetErrorType();
+  int GetErrorCode();
+  std::string GetErrorString();
+
+  std::string GetErrorTypeString();
+  std::string DebugString();
 
  private:
   std::shared_ptr<FunapiErrorImpl> impl_;
@@ -124,8 +161,7 @@ class FUNAPI_API FunapiTransportOption : public std::enable_shared_from_this<Fun
   FunapiTransportOption() = default;
   virtual ~FunapiTransportOption() = default;
 
-  virtual void SetEncryptionType(EncryptionType type) = 0;
-  virtual EncryptionType GetEncryptionType() = 0;
+  virtual void SetEncryptionType(const EncryptionType type) = 0;
 };
 
 
@@ -152,11 +188,11 @@ class FUNAPI_API FunapiTcpTransportOption : public FunapiTransportOption {
   void SetConnectTimeout(const int seconds);
   int GetConnectTimeout();
 
-  void SetEncryptionType(EncryptionType type);
-  EncryptionType GetEncryptionType();
+  void SetEncryptionType(const EncryptionType type);
+  std::vector<EncryptionType> GetEncryptionTypes();
 
-  void SetEncryptionType(EncryptionType type, const std::string &public_key);
-  const std::string& GetPublicKey();
+  void SetEncryptionType(const EncryptionType type, const std::string &public_key);
+  std::string GetPublicKey(const EncryptionType type);
 
  private:
   std::shared_ptr<FunapiTcpTransportOptionImpl> impl_;
@@ -171,7 +207,7 @@ class FUNAPI_API FunapiUdpTransportOption : public FunapiTransportOption {
 
   static std::shared_ptr<FunapiUdpTransportOption> Create();
 
-  void SetEncryptionType(EncryptionType type);
+  void SetEncryptionType(const EncryptionType type);
   EncryptionType GetEncryptionType();
 
  private:
@@ -196,7 +232,7 @@ class FUNAPI_API FunapiHttpTransportOption : public FunapiTransportOption {
   void SetUseHttps(const bool https);
   bool GetUseHttps();
 
-  void SetEncryptionType(EncryptionType type);
+  void SetEncryptionType(const EncryptionType type);
   EncryptionType GetEncryptionType();
 
   void SetCACertFilePath(const std::string &path);
